@@ -49,15 +49,36 @@ async function initHandLandmarker() {
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
   );
 
-  handLandmarker = await HandLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-      delegate: "CPU" // pakai CPU biar gak crash gara-gara GPU/driver bermasalah
-    },
-    runningMode: "VIDEO",
-    numHands: 1
-  });
+  try {
+
+    // coba GPU dulu — jauh lebih cepat, ini library baru (tasks-vision)
+    // jadi gak kena bug yang ada di library lama (@mediapipe/hands)
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numHands: 1
+    });
+
+  } catch (err) {
+
+    console.log("GPU gagal, fallback ke CPU:", err);
+
+    // kalau GPU gagal di device tertentu, otomatis pakai CPU sebagai cadangan
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate: "CPU"
+      },
+      runningMode: "VIDEO",
+      numHands: 1
+    });
+
+  }
 
 }
 
@@ -183,7 +204,7 @@ function renderLoop() {
     textCtx.textAlign = "center";
     textCtx.textBaseline = "middle";
     textCtx.shadowColor = "rgba(0,0,0,0.6)";
-    textCtx.shadowBlur = 12;
+    textCtx.shadowBlur = 8;
     textCtx.fillText("FOTO KITA BLUR", canvas.width / 2, textY);
     textCtx.shadowBlur = 0;
 
@@ -215,7 +236,7 @@ function renderLoop() {
     textCtx.textAlign = "center";
     textCtx.textBaseline = "middle";
     textCtx.shadowColor = "rgba(0,0,0,0.6)";
-    textCtx.shadowBlur = 12;
+    textCtx.shadowBlur = 8;
     textCtx.fillText("pria solo itu lagi", canvas.width / 2, textY);
     textCtx.shadowBlur = 0;
 
