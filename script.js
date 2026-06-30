@@ -11,6 +11,11 @@ const textCanvas = document.getElementById("textCanvas");
 const textCtx = textCanvas.getContext("2d");
 
 const start = document.getElementById("start");
+const stopBtn = document.getElementById("stop");
+const countdownEl = document.getElementById("countdown");
+const resultBox = document.getElementById("resultBox");
+const downloadLink = document.getElementById("downloadLink");
+const retryBtn = document.getElementById("retry");
 
 const foto = document.getElementById("foto");
 const jokowi = document.getElementById("jokowi");
@@ -20,6 +25,153 @@ let handLandmarker = null;
 let lastVideoTime = -1;
 let frameCount = 0;
 
+const WATERMARK_TEXT = "@daffapriyantana";
+
+
+// ===================
+// CANVAS KHUSUS REKAM
+// ===================
+// Canvas ini TIDAK ditampilkan ke user (gak ditaruh ke DOM), cuma dipakai
+// sebagai sumber video untuk MediaRecorder. Kenapa harus terpisah dari
+// canvas tampilan? Karena blur di canvas tampilan pakai CSS filter
+// (style.filter), dan CSS filter TIDAK ikut kebawa kalau kita
+// captureStream() dari canvas itu. Jadi semua efek (video, blur, teks
+// gesture, watermark) digambar ULANG secara manual di sini tiap frame
+// pakai ctx.filter & drawImage biasa, supaya ikut kerekam di video hasil.
+const recordCanvas = document.createElement("canvas");
+const recordCtx = recordCanvas.getContext("2d");
+
+
+// ===================
+// AUDIO GRAPH (buat ngerekam suara foto.mp3 / hidup_jokowi.mp3)
+// ===================
+// createMediaElementSource cuma boleh dipanggil SEKALI per elemen audio
+// seumur hidup elemen itu, makanya di-guard pakai audioCtx (null check)
+// supaya gak ke-trigger dua kali kalau user klik start lagi.
+let audioCtx = null;
+let destNode = null;
+
+function setupAudioGraph() {
+
+  if (audioCtx) return;
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  destNode = audioCtx.createMediaStreamDestination();
+
+  const fotoSource = audioCtx.createMediaElementSource(foto);
+  fotoSource.connect(destNode);
+  fotoSource.connect(audioCtx.destination); // tetap kedengeran di speaker
+
+  const jokowiSource = audioCtx.createMediaElementSource(jokowi);
+  jokowiSource.connect(destNode);
+  jokowiSource.connect(audioCtx.destination);
+
+}
+
+
+// ===================
+// MEDIARECORDER
+// ===================
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let chosenMimeType = "video/webm";
+
+function pickMimeType() {
+
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4" // fallback buat Safari versi yang dukung recording ke mp4
+  ];
+
+  for (const type of candidates) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) {
+      return type;
+    }
+  }
+
+  return "video/webm";
+
+}
+
+function startRecording() {
+
+  recordedChunks = [];
+  chosenMimeType = pickMimeType();
+
+  const videoStream = recordCanvas.captureStream(30);
+  const combinedStream = new MediaStream();
+
+  videoStream.getVideoTracks().forEach((t) => combinedStream.addTrack(t));
+  destNode.stream.getAudioTracks().forEach((t) => combinedStream.addTrack(t));
+
+  mediaRecorder = new MediaRecorder(combinedStream, {
+    mimeType: chosenMimeType
+  });
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      recordedChunks.push(e.data);
+    }
+  };
+
+  mediaRecorder.onstop = () => {
+
+    const blob = new Blob(recordedChunks, {
+      type: chosenMimeType.split(";")[0]
+    });
+    const url = URL.createObjectURL(blob);
+    const ext = chosenMimeType.includes("mp4") ? "mp4" : "webm";
+
+    downloadLink.href = url;
+    downloadLink.download = `daffapriyantana-${Date.now()}.${ext}`;
+
+    resultBox.style.display = "flex";
+
+  };
+
+  mediaRecorder.start();
+
+}
+
+function stopRecording() {
+
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.stop();
+  }
+
+}
+
+
+// ===================
+// COUNTDOWN 3..2..1
+// ===================
+
+function runCountdown(onDone) {
+
+  let count = 3;
+
+  countdownEl.style.display = "flex";
+  countdownEl.textContent = count;
+
+  const interval = setInterval(() => {
+
+    count--;
+
+    if (count > 0) {
+      countdownEl.textContent = count;
+    } else {
+      clearInterval(interval);
+      countdownEl.style.display = "none";
+      onDone();
+    }
+
+  }, 1000);
+
+}
+
 
 // ===================
 // START
@@ -27,15 +179,52 @@ let frameCount = 0;
 
 start.onclick = () => {
 
-  foto.loop = true;
-  foto.currentTime = 0;
-
-  foto.play().catch((err) => {
-    console.log("Gagal play foto:", err);
-  });
-
   start.style.display = "none";
 
+  setupAudioGraph();
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+
+  runCountdown(() => {
+
+    foto.loop = true;
+    foto.currentTime = 0;
+    foto.play().catch((err) => {
+      console.log("Gagal play foto:", err);
+    });
+
+    startRecording();
+    stopBtn.style.display = "inline-flex";
+
+  });
+
+};
+
+
+// ===================
+// STOP
+// ===================
+
+stopBtn.onclick = () => {
+
+  stopBtn.style.display = "none";
+
+  stopRecording();
+
+  foto.pause();
+  jokowi.pause();
+  jokowi.currentTime = 0;
+
+};
+
+
+// ===================
+// REKAM ULANG
+// ===================
+
+retryBtn.onclick = () => {
+  location.reload();
 };
 
 
@@ -126,6 +315,36 @@ function detect(lm) {
 
 
 // ===================
+// WATERMARK (kiri bawah, gaya transparan ala TikTok)
+// ===================
+
+function drawWatermark(targetCtx, w, h) {
+
+  const fontSize = Math.max(14, Math.round(Math.min(w, h) * 0.045));
+
+  targetCtx.save();
+  targetCtx.font = `italic 600 ${fontSize}px 'Segoe UI', system-ui, -apple-system, sans-serif`;
+  targetCtx.textAlign = "left";
+  targetCtx.textBaseline = "bottom";
+
+  // shadow tipis biar tetap kebaca di background apapun, tapi badan
+  // teksnya sendiri tetap setengah transparan (efek ala watermark TikTok)
+  targetCtx.shadowColor = "rgba(0,0,0,0.45)";
+  targetCtx.shadowBlur = 6;
+  targetCtx.fillStyle = "rgba(255,255,255,0.55)";
+
+  const x = w * 0.035;
+  const y = h - (h * 0.035);
+
+  targetCtx.fillText(WATERMARK_TEXT, x, y);
+
+  targetCtx.shadowBlur = 0;
+  targetCtx.restore();
+
+}
+
+
+// ===================
 // LOOP UTAMA
 // ===================
 
@@ -144,6 +363,8 @@ function renderLoop() {
     canvas.height = video.videoHeight;
     textCanvas.width = video.videoWidth;
     textCanvas.height = video.videoHeight;
+    recordCanvas.width = video.videoWidth;
+    recordCanvas.height = video.videoHeight;
   }
 
   frameCount++;
@@ -172,6 +393,7 @@ function renderLoop() {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+  recordCtx.clearRect(0, 0, recordCanvas.width, recordCanvas.height);
 
   // ukuran font dihitung dari sisi TERKECIL canvas, biar tetap proporsional
   // baik di layar landscape (laptop) maupun portrait (HP)
@@ -183,7 +405,7 @@ function renderLoop() {
 
 
   // ===================
-  // EFEK SESUAI GESTURE
+  // EFEK SESUAI GESTURE (TAMPILAN / PREVIEW)
   // ===================
   // CATATAN: blur pakai CSS filter di elemen <canvas>, BUKAN ctx.filter.
   // ctx.filter="blur()" tidak reliable di Safari/WebKit (sering gak
@@ -245,6 +467,22 @@ function renderLoop() {
     }
 
   }
+
+
+  // ===================
+  // GAMBAR ULANG KE recordCanvas (buat hasil rekaman)
+  // ===================
+  // Urutan: video (+blur manual kalau gesture V) -> overlay teks/efek
+  // gesture (disalin dari textCanvas) -> watermark paling atas, supaya
+  // watermark selalu kebaca dan gak ketutup efek apapun.
+
+  recordCtx.filter = (gesture === "V") ? "blur(18px)" : "none";
+  recordCtx.drawImage(video, 0, 0, recordCanvas.width, recordCanvas.height);
+  recordCtx.filter = "none";
+
+  recordCtx.drawImage(textCanvas, 0, 0, recordCanvas.width, recordCanvas.height);
+
+  drawWatermark(recordCtx, recordCanvas.width, recordCanvas.height);
 
   requestAnimationFrame(renderLoop);
 
