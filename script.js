@@ -46,10 +46,38 @@ let MAX_RECORD_SIDE = 1280;
 
 const QUALITY_TIERS = {
   high: { maxSide: 1920, crf: "17", preset: "fast", timeoutMs: 180000, label: "Tinggi (1080p)" },
-  mid: { maxSide: 1280, crf: "19", preset: "veryfast", timeoutMs: 150000, label: "Bagus (720p)" }
+  mid: { maxSide: 1280, crf: "19", preset: "veryfast", timeoutMs: 150000, label: "Bagus (720p)" },
+  // Khusus iOS Safari: ffmpeg.wasm gampang timeout/gagal diam-diam di iPhone
+  // (memori WASM dibatasi ketat sama Safari, dan GitHub Pages gak ngirim
+  // header COOP/COEP buat threading optimal). hardwareConcurrency di iOS
+  // juga sering kebaca tinggi padahal device-nya gak sanggup transcode berat,
+  // jadi JANGAN dipakai buat nentuin tier di iOS — langsung paksa ringan.
+  ios_safe: { maxSide: 960, crf: "23", preset: "ultrafast", timeoutMs: 90000, label: "Hemat (iPhone)" }
 };
 
+// Tier darurat: dipakai cuma kalau percobaan convert PERTAMA gagal/timeout.
+// Resolusi diturunkan paksa lewat -vf scale (terlepas dari resolusi rekam
+// aslinya) + preset paling cepat, biar peluang convert SUKSES jauh lebih
+// besar ketimbang nyerah total ke video mentah (yang keyframe-nya jarang
+// dan bikin macet di TikTok).
+const RESCUE_TIER = {
+  crf: "30",
+  preset: "ultrafast",
+  timeoutMs: 60000,
+  scale: "640:-2",
+  label: "Hemat Maksimal (mode darurat)"
+};
+
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 function getQualityTier() {
+
+  if (isIOS()) {
+    return "ios_safe";
+  }
 
   const mem = navigator.deviceMemory; // GB, bisa undefined
   const cores = navigator.hardwareConcurrency || 4;
@@ -58,7 +86,6 @@ function getQualityTier() {
     return mem >= 6 ? "high" : "mid";
   }
 
-  // fallback buat browser yang gak expose deviceMemory (Safari/iOS)
   return cores >= 6 ? "high" : "mid";
 
 }
@@ -293,19 +320,25 @@ function withTimeout(promise, ms) {
 
 }
 
-async function convertToMp4(blob, inputExt) {
+async function convertToMp4(blob, inputExt, tier) {
 
   const inst = await getFFmpeg();
   const { fetchFile } = await import(
     "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js"
   );
 
-  const inputName = `input.${inputExt}`;
-  const outputName = "output.mp4";
+  // nama file dikasih suffix unik per-percobaan, biar kalau ini adalah
+  // retry (mode darurat) gak bentrok sama sisa file dari percobaan
+  // sebelumnya yang mungkin gagal di tengah jalan (gagal exec bisa nyisain
+  // file lama yang belum sempat dihapus).
+  const uid = Date.now();
+  const inputName = `input_${uid}.${inputExt}`;
+  const outputName = `output_${uid}.mp4`;
 
   await inst.writeFile(inputName, await fetchFile(blob));
 
-  // setting CRF & preset dipakai dari activeTier (adaptive sesuai device).
+  // setting CRF & preset dipakai dari tier yang dioper (adaptive sesuai
+  // device, atau tier darurat kalau ini percobaan retry).
   // GOP dipaksa pendek (keyframe tiap 1 detik / 30 frame) + sc_threshold
   // dimatiin biar x264 GAK nentuin sendiri kapan taro keyframe (default-nya
   // adaptif, bisa jadi cuma 1 keyframe doang di awal kalau scene-nya
@@ -313,11 +346,21 @@ async function convertToMp4(blob, inputExt) {
   // TikTok macet di detik ke-1 pas masuk editor: TikTok perlu loncat/seek
   // buat generate thumbnail & preview, dan tanpa keyframe yang sering,
   // dia gak nemu titik aman buat mulai baca ulang -> freeze.
-  await inst.exec([
+  const args = [
     "-i", inputName,
     "-c:v", "libx264",
-    "-preset", activeTier.preset,
-    "-crf", activeTier.crf,
+    "-preset", tier.preset,
+    "-crf", tier.crf
+  ];
+
+  // tier darurat (RESCUE_TIER) bawa properti scale buat maksa resolusi
+  // turun lebih jauh lagi, terlepas dari resolusi asli hasil rekam,
+  // demi peluang convert SUKSES lebih besar.
+  if (tier.scale) {
+    args.push("-vf", `scale=${tier.scale}`);
+  }
+
+  args.push(
     "-pix_fmt", "yuv420p",
     "-r", "30",
     "-vsync", "cfr",
@@ -329,14 +372,24 @@ async function convertToMp4(blob, inputExt) {
     "-ar", "44100",
     "-movflags", "+faststart",
     outputName
-  ]);
+  );
 
-  const data = await inst.readFile(outputName);
+  try {
 
-  await inst.deleteFile(inputName);
-  await inst.deleteFile(outputName);
+    await inst.exec(args);
 
-  return new Blob([data.buffer], { type: "video/mp4" });
+    const data = await inst.readFile(outputName);
+    return new Blob([data.buffer], { type: "video/mp4" });
+
+  } finally {
+
+    // cleanup dibungkus try/catch sendiri-sendiri: kalau exec gagal
+    // sebelum sempat bikin outputName, deleteFile(outputName) bakal
+    // nge-throw — tapi itu gak boleh nutupin error asli dari exec.
+    try { await inst.deleteFile(inputName); } catch (e) {}
+    try { await inst.deleteFile(outputName); } catch (e) {}
+
+  }
 
 }
 
@@ -372,13 +425,35 @@ async function handleRecordingStop() {
 
   try {
 
-    const mp4Blob = await withTimeout(convertToMp4(rawBlob, inputExt), activeTier.timeoutMs);
+    const mp4Blob = await withTimeout(
+      convertToMp4(rawBlob, inputExt, activeTier),
+      activeTier.timeoutMs
+    );
     finalizeDownload(mp4Blob, "mp4", `MP4 — Kualitas ${activeTier.label}`);
 
-  } catch (err) {
+  } catch (err1) {
 
-    console.error("Gagal convert ke mp4:", err);
-    finalizeDownload(rawBlob, inputExt, `${inputExt.toUpperCase()} (convert MP4 gagal/timeout, video tetap disimpan)`);
+    console.warn("Convert pertama gagal/timeout, coba mode darurat:", err1);
+    processingTextEl.textContent = "Convert kelamaan, coba mode hemat...";
+
+    try {
+
+      const mp4BlobRescue = await withTimeout(
+        convertToMp4(rawBlob, inputExt, RESCUE_TIER),
+        RESCUE_TIER.timeoutMs
+      );
+      finalizeDownload(mp4BlobRescue, "mp4", `MP4 — ${RESCUE_TIER.label}`);
+
+    } catch (err2) {
+
+      console.error("Convert mode darurat juga gagal:", err2);
+      finalizeDownload(
+        rawBlob,
+        inputExt,
+        `${inputExt.toUpperCase()} (convert MP4 gagal 2x, video disimpan apa adanya — kemungkinan TIDAK kompatibel untuk diedit di TikTok)`
+      );
+
+    }
 
   } finally {
 
