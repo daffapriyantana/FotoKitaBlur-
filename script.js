@@ -30,11 +30,41 @@ let frameCount = 0;
 
 const WATERMARK_TEXT = "@daffapriyantana";
 
-// batas maksimal sisi terpanjang video HASIL REKAMAN. Live preview tetap
-// pakai resolusi kamera penuh (HD) biar tajam, tapi yang dipakai buat
-// di-convert ke mp4 dibatasi segini supaya proses ffmpeg.wasm di HP
-// kelas menengah/bawah tetap aman & gak nge-hang/crash.
-const MAX_RECORD_SIDE = 960;
+// batas maksimal sisi terpanjang video HASIL REKAMAN, sekarang ADAPTIF
+// sesuai kemampuan device (ditentukan di bawah lewat getQualityTier()).
+let MAX_RECORD_SIDE = 1280;
+
+// ===================
+// ADAPTIVE QUALITY — nyesuaiin setting encode (resolusi, CRF, preset)
+// sesuai kemampuan device, biar device kenceng dapet hasil maksimal dan
+// device medium tetap dapet kualitas bagus tapi tetap aman/gak nge-hang.
+// navigator.deviceMemory cuma kebaca di browser berbasis Chromium
+// (Android Chrome dll), TIDAK ada di Safari/iOS — makanya kalau gak ada,
+// kita tebak pakai jumlah core CPU (hardwareConcurrency) yang didukung
+// lebih luas termasuk Safari.
+// ===================
+
+const QUALITY_TIERS = {
+  high: { maxSide: 1920, crf: "17", preset: "fast", timeoutMs: 180000, label: "Tinggi (1080p)" },
+  mid: { maxSide: 1280, crf: "19", preset: "veryfast", timeoutMs: 150000, label: "Bagus (720p)" }
+};
+
+function getQualityTier() {
+
+  const mem = navigator.deviceMemory; // GB, bisa undefined
+  const cores = navigator.hardwareConcurrency || 4;
+
+  if (mem) {
+    return mem >= 6 ? "high" : "mid";
+  }
+
+  // fallback buat browser yang gak expose deviceMemory (Safari/iOS)
+  return cores >= 6 ? "high" : "mid";
+
+}
+
+const activeTier = QUALITY_TIERS[getQualityTier()];
+MAX_RECORD_SIDE = activeTier.maxSide;
 
 
 // ===================
@@ -174,9 +204,9 @@ function startRecording() {
   recordedChunks = [];
   chosenMimeType = pickMimeType();
 
-  // 24fps cukup buat hasil yang halus tapi lebih ringan buat di-encode
-  // ulang oleh ffmpeg.wasm dibanding 30fps, terutama di HP lemah.
-  const videoStream = recordCanvas.captureStream(24);
+  // 30fps buat hasil gerakan yang lebih halus (sebelumnya 24fps demi
+  // ringan, tapi sekarang kualitas diprioritaskan)
+  const videoStream = recordCanvas.captureStream(30);
   const combinedStream = new MediaStream();
 
   videoStream.getVideoTracks().forEach((t) => combinedStream.addTrack(t));
@@ -275,15 +305,27 @@ async function convertToMp4(blob) {
 
   await inst.writeFile(inputName, await fetchFile(blob));
 
+  // setting CRF & preset dipakai dari activeTier (adaptive sesuai device).
+  // GOP dipaksa pendek (keyframe tiap 1 detik / 30 frame) + sc_threshold
+  // dimatiin biar x264 GAK nentuin sendiri kapan taro keyframe (default-nya
+  // adaptif, bisa jadi cuma 1 keyframe doang di awal kalau scene-nya
+  // cenderung statis kayak rekaman wajah diem). Ini akar masalah kenapa
+  // TikTok macet di detik ke-1 pas masuk editor: TikTok perlu loncat/seek
+  // buat generate thumbnail & preview, dan tanpa keyframe yang sering,
+  // dia gak nemu titik aman buat mulai baca ulang -> freeze.
   await inst.exec([
     "-i", inputName,
     "-c:v", "libx264",
-    "-preset", "ultrafast",
-    "-crf", "24",
+    "-preset", activeTier.preset,
+    "-crf", activeTier.crf,
     "-pix_fmt", "yuv420p",
-    "-r", "24",
+    "-r", "30",
     "-vsync", "cfr",
+    "-g", "30",
+    "-keyint_min", "30",
+    "-sc_threshold", "0",
     "-c:a", "aac",
+    "-b:a", "128k",
     "-ar", "44100",
     "-movflags", "+faststart",
     outputName
@@ -327,8 +369,8 @@ async function handleRecordingStop() {
 
   try {
 
-    const mp4Blob = await withTimeout(convertToMp4(rawBlob), 90000);
-    finalizeDownload(mp4Blob, "mp4", "MP4");
+    const mp4Blob = await withTimeout(convertToMp4(rawBlob), activeTier.timeoutMs);
+    finalizeDownload(mp4Blob, "mp4", `MP4 — Kualitas ${activeTier.label}`);
 
   } catch (err) {
 
@@ -482,8 +524,8 @@ async function initHandLandmarker() {
 navigator.mediaDevices
   .getUserMedia({
     video: {
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
       facingMode: "user"
     }
   })
