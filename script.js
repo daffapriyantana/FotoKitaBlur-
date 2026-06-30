@@ -704,27 +704,118 @@ function updateStableGesture(rawGesture) {
 // ===================
 // WATERMARK (kiri bawah, gaya transparan ala TikTok)
 // ===================
+// shadowBlur itu operasi CANVAS PALING BERAT, apalagi di resolusi tinggi,
+// dan SEBELUMNYA dihitung ULANG tiap frame (30x/detik). Ini salah satu
+// biang utama main-thread ke-block -> frame video gak rata -> patah-patah
+// pas diputar (apalagi di TikTok yang sensitif soal ini). Sekarang teks +
+// shadow-nya digambar SEKALI ke canvas tersembunyi (cache), tiap frame
+// abis itu tinggal drawImage (operasi composite biasa, jauh lebih murah).
+const watermarkCacheState = { canvas: null, key: "" };
 
-function drawWatermark(targetCtx, w, h) {
+function getWatermarkCanvas(w, h) {
+
+  const key = `${w}x${h}`;
+  if (watermarkCacheState.canvas && watermarkCacheState.key === key) {
+    return watermarkCacheState.canvas;
+  }
+
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const cctx = c.getContext("2d");
 
   const fontSize = Math.max(14, Math.round(Math.min(w, h) * 0.045));
 
-  targetCtx.save();
-  targetCtx.font = `italic 600 ${fontSize}px 'Segoe UI', system-ui, -apple-system, sans-serif`;
-  targetCtx.textAlign = "left";
-  targetCtx.textBaseline = "bottom";
-
-  targetCtx.shadowColor = "rgba(0,0,0,0.45)";
-  targetCtx.shadowBlur = 6;
-  targetCtx.fillStyle = "rgba(255,255,255,0.55)";
+  cctx.font = `italic 600 ${fontSize}px 'Segoe UI', system-ui, -apple-system, sans-serif`;
+  cctx.textAlign = "left";
+  cctx.textBaseline = "bottom";
+  cctx.shadowColor = "rgba(0,0,0,0.45)";
+  cctx.shadowBlur = 6;
+  cctx.fillStyle = "rgba(255,255,255,0.55)";
 
   const x = w * 0.035;
   const y = h - (h * 0.035);
 
-  targetCtx.fillText(WATERMARK_TEXT, x, y);
+  cctx.fillText(WATERMARK_TEXT, x, y);
 
-  targetCtx.shadowBlur = 0;
-  targetCtx.restore();
+  watermarkCacheState.canvas = c;
+  watermarkCacheState.key = key;
+
+  return c;
+
+}
+
+function drawWatermark(targetCtx, w, h) {
+  const wm = getWatermarkCanvas(w, h);
+  targetCtx.drawImage(wm, 0, 0);
+}
+
+
+// ===================
+// OVERLAY TEKS GESTURE (V-sign & FIST) — sama-sama di-cache per ukuran,
+// alasan sama kayak watermark di atas: shadowBlur tiap frame itu mahal.
+// ===================
+const vTextCacheState = { canvas: null, key: "" };
+const fistOverlayCacheState = { canvas: null, key: "" };
+
+function getVTextCanvas(w, h) {
+
+  const key = `${w}x${h}`;
+  if (vTextCacheState.canvas && vTextCacheState.key === key) {
+    return vTextCacheState.canvas;
+  }
+
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const cctx = c.getContext("2d");
+
+  const fontSize = Math.round(Math.min(w, h) * 0.08);
+
+  cctx.font = `bold ${fontSize}px Arial`;
+  cctx.fillStyle = "white";
+  cctx.textAlign = "center";
+  cctx.textBaseline = "middle";
+  cctx.shadowColor = "rgba(0,0,0,0.6)";
+  cctx.shadowBlur = 8;
+  cctx.fillText("FOTO KITA BLUR", w / 2, h / 2);
+
+  vTextCacheState.canvas = c;
+  vTextCacheState.key = key;
+
+  return c;
+
+}
+
+function getFistOverlayCanvas(w, h) {
+
+  const key = `${w}x${h}`;
+  if (fistOverlayCacheState.canvas && fistOverlayCacheState.key === key) {
+    return fistOverlayCacheState.canvas;
+  }
+
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const cctx = c.getContext("2d");
+
+  const fontSize = Math.round(Math.min(w, h) * 0.08);
+
+  cctx.fillStyle = "rgba(255,0,0,0.3)";
+  cctx.fillRect(0, 0, w, h);
+
+  cctx.font = `bold ${fontSize}px Arial`;
+  cctx.fillStyle = "white";
+  cctx.textAlign = "center";
+  cctx.textBaseline = "middle";
+  cctx.shadowColor = "rgba(0,0,0,0.6)";
+  cctx.shadowBlur = 8;
+  cctx.fillText("pria solo itu lagi", w / 2, h / 2);
+
+  fistOverlayCacheState.canvas = c;
+  fistOverlayCacheState.key = key;
+
+  return c;
 
 }
 
@@ -786,9 +877,6 @@ function renderLoop() {
   textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
   recordCtx.clearRect(0, 0, recordCanvas.width, recordCanvas.height);
 
-  let fontSize = Math.round(Math.min(canvas.width, canvas.height) * 0.08);
-  let textY = canvas.height / 2;
-
 
   // ===================
   // GAMBAR FRAME (PREVIEW) — blur manual, BUKAN CSS filter lagi
@@ -797,16 +885,7 @@ function renderLoop() {
   drawFrame(ctx, canvas.width, canvas.height, gesture === "V");
 
   if (gesture === "V") {
-
-    textCtx.font = `bold ${fontSize}px Arial`;
-    textCtx.fillStyle = "white";
-    textCtx.textAlign = "center";
-    textCtx.textBaseline = "middle";
-    textCtx.shadowColor = "rgba(0,0,0,0.6)";
-    textCtx.shadowBlur = 8;
-    textCtx.fillText("FOTO KITA BLUR", canvas.width / 2, textY);
-    textCtx.shadowBlur = 0;
-
+    textCtx.drawImage(getVTextCanvas(canvas.width, canvas.height), 0, 0);
   }
 
 
@@ -823,17 +902,7 @@ function renderLoop() {
       });
     }
 
-    textCtx.fillStyle = "rgba(255,0,0,0.3)";
-    textCtx.fillRect(0, 0, textCanvas.width, textCanvas.height);
-
-    textCtx.font = `bold ${fontSize}px Arial`;
-    textCtx.fillStyle = "white";
-    textCtx.textAlign = "center";
-    textCtx.textBaseline = "middle";
-    textCtx.shadowColor = "rgba(0,0,0,0.6)";
-    textCtx.shadowBlur = 8;
-    textCtx.fillText("pria solo itu lagi", canvas.width / 2, textY);
-    textCtx.shadowBlur = 0;
+    textCtx.drawImage(getFistOverlayCanvas(textCanvas.width, textCanvas.height), 0, 0);
 
   } else {
 
