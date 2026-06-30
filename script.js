@@ -49,36 +49,22 @@ async function initHandLandmarker() {
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
   );
 
-  try {
+  console.log("Memulai inisialisasi HandLandmarker...");
 
-    // coba GPU dulu — jauh lebih cepat, ini library baru (tasks-vision)
-    // jadi gak kena bug yang ada di library lama (@mediapipe/hands)
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      numHands: 1
-    });
+  // SEMENTARA dipaksa CPU dulu buat debugging Safari — GPU mungkin yang
+  // nyangkut diam-diam (gak nge-throw error) di iOS, jadi fallback
+  // try/catch kita gak pernah ke-trigger walau sebenarnya bermasalah
+  handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "CPU"
+    },
+    runningMode: "VIDEO",
+    numHands: 1
+  });
 
-  } catch (err) {
-
-    console.log("GPU gagal, fallback ke CPU:", err);
-
-    // kalau GPU gagal di device tertentu, otomatis pakai CPU sebagai cadangan
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-        delegate: "CPU"
-      },
-      runningMode: "VIDEO",
-      numHands: 1
-    });
-
-  }
+  console.log("HandLandmarker siap!");
 
 }
 
@@ -90,8 +76,8 @@ async function initHandLandmarker() {
 navigator.mediaDevices
   .getUserMedia({
     video: {
-      width: { ideal: 640 },
-      height: { ideal: 480 },
+      width: { ideal: 480 },
+      height: { ideal: 360 },
       facingMode: "user"
     }
   })
@@ -150,20 +136,31 @@ function renderLoop() {
     return;
   }
 
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  textCanvas.width = video.videoWidth;
-  textCanvas.height = video.videoHeight;
+  // hanya resize canvas kalau ukurannya BENERAN berubah — nge-set
+  // canvas.width/height tiap frame walau nilainya sama tetap memicu
+  // realloc buffer penuh di Safari, ini penyumbang lag yang besar
+  if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    textCanvas.width = video.videoWidth;
+    textCanvas.height = video.videoHeight;
+  }
 
   frameCount++;
 
-  // deteksi tangan tiap 2 frame aja (bukan tiap frame) biar gak berat
+  // deteksi tangan tiap 3 frame aja (bukan tiap frame) biar gak berat
   // di Safari/HP yang CPU-nya lebih lemah — video tetap smooth tiap frame
-  if (frameCount % 2 === 0 && video.currentTime !== lastVideoTime) {
+  if (frameCount % 3 === 0 && video.currentTime !== lastVideoTime) {
 
     lastVideoTime = video.currentTime;
 
+    const t0 = performance.now();
     const result = handLandmarker.detectForVideo(video, performance.now());
+    const t1 = performance.now();
+
+    if (t1 - t0 > 200) {
+      console.warn("detectForVideo LAMA:", Math.round(t1 - t0), "ms");
+    }
 
     if (result.landmarks && result.landmarks.length > 0) {
       gesture = detect(result.landmarks[0]);
