@@ -14,7 +14,9 @@ const start = document.getElementById("start");
 const stopBtn = document.getElementById("stop");
 const countdownEl = document.getElementById("countdown");
 const processingEl = document.getElementById("processing");
+const processingTextEl = document.getElementById("processingText");
 const resultBox = document.getElementById("resultBox");
+const resultNote = document.getElementById("resultNote");
 const downloadLink = document.getElementById("downloadLink");
 const retryBtn = document.getElementById("retry");
 
@@ -28,27 +30,75 @@ let frameCount = 0;
 
 const WATERMARK_TEXT = "@daffapriyantana";
 
+// batas maksimal sisi terpanjang video HASIL REKAMAN. Live preview tetap
+// pakai resolusi kamera penuh (HD) biar tajam, tapi yang dipakai buat
+// di-convert ke mp4 dibatasi segini supaya proses ffmpeg.wasm di HP
+// kelas menengah/bawah tetap aman & gak nge-hang/crash.
+const MAX_RECORD_SIDE = 960;
+
 
 // ===================
 // CANVAS KHUSUS REKAM
 // ===================
 // Canvas ini TIDAK ditampilkan ke user (gak ditaruh ke DOM), cuma dipakai
-// sebagai sumber video untuk MediaRecorder. Kenapa harus terpisah dari
-// canvas tampilan? Karena blur di canvas tampilan pakai CSS filter
-// (style.filter), dan CSS filter TIDAK ikut kebawa kalau kita
-// captureStream() dari canvas itu. Jadi semua efek (video, blur, teks
-// gesture, watermark) digambar ULANG secara manual di sini tiap frame
-// pakai ctx.filter & drawImage biasa, supaya ikut kerekam di video hasil.
+// sebagai sumber video untuk MediaRecorder. Semua efek (video, blur,
+// teks gesture, watermark) digambar ULANG secara manual di sini tiap
+// frame, terpisah dari resolusi preview, supaya hasil rekam tetap ringan.
 const recordCanvas = document.createElement("canvas");
 const recordCtx = recordCanvas.getContext("2d");
+
+function computeRecordSize(vw, vh) {
+
+  const longest = Math.max(vw, vh);
+
+  if (longest <= MAX_RECORD_SIDE) {
+    return { rw: vw, rh: vh };
+  }
+
+  const scale = MAX_RECORD_SIDE / longest;
+  return {
+    rw: Math.round(vw * scale),
+    rh: Math.round(vh * scale)
+  };
+
+}
+
+
+// ===================
+// BLUR MANUAL (downscale -> upscale)
+// ===================
+// ctx.filter="blur()" / CSS filter TIDAK reliable lintas browser HP,
+// terutama in-app browser (WhatsApp/Instagram) & Safari iOS — kadang
+// kelihatan pas preview, ilang pas direkam/didownload. Trik ini cuma
+// pakai drawImage + image smoothing, yang didukung 100% di semua browser,
+// jadi hasilnya KONSISTEN baik di preview maupun di video hasil download.
+const blurTempCanvas = document.createElement("canvas");
+const blurTempCtx = blurTempCanvas.getContext("2d");
+
+function drawFrame(targetCtx, w, h, blurOn) {
+
+  if (!blurOn) {
+    targetCtx.drawImage(video, 0, 0, w, h);
+    return;
+  }
+
+  const sw = 28; // makin kecil, makin blur hasilnya
+  const sh = Math.max(1, Math.round(sw * (h / w)));
+
+  blurTempCanvas.width = sw;
+  blurTempCanvas.height = sh;
+  blurTempCtx.drawImage(video, 0, 0, sw, sh);
+
+  targetCtx.imageSmoothingEnabled = true;
+  targetCtx.imageSmoothingQuality = "high";
+  targetCtx.drawImage(blurTempCanvas, 0, 0, sw, sh, 0, 0, w, h);
+
+}
 
 
 // ===================
 // AUDIO GRAPH (buat ngerekam suara foto.mp3 / hidup_jokowi.mp3)
 // ===================
-// createMediaElementSource cuma boleh dipanggil SEKALI per elemen audio
-// seumur hidup elemen itu, makanya di-guard pakai audioCtx (null check)
-// supaya gak ke-trigger dua kali kalau user klik start lagi.
 let audioCtx = null;
 let destNode = null;
 
@@ -61,22 +111,13 @@ function setupAudioGraph() {
 
   const fotoSource = audioCtx.createMediaElementSource(foto);
   fotoSource.connect(destNode);
-  fotoSource.connect(audioCtx.destination); // tetap kedengeran di speaker
+  fotoSource.connect(audioCtx.destination);
 
   const jokowiSource = audioCtx.createMediaElementSource(jokowi);
   jokowiSource.connect(destNode);
   jokowiSource.connect(audioCtx.destination);
 
 }
-
-
-// ===================
-// BEEP COUNTDOWN (ala TikTok) — disintesis pakai oscillator, BUKAN file
-// audio. Sengaja cuma disambung ke audioCtx.destination (speaker), TIDAK
-// disambung ke destNode, supaya bunyi "tik" countdown ini gak ikut
-// kerekam di video (logis, soalnya recording baru mulai SETELAH
-// countdown selesai).
-// ===================
 
 function beep(freq = 880, duration = 0.12, volume = 0.25) {
 
@@ -110,9 +151,6 @@ let chosenMimeType = "video/webm";
 
 function pickMimeType() {
 
-  // diutamakan video/mp4 dulu (cuma kebaca true di Safari versi baru) —
-  // kalau browser bisa langsung rekam ke mp4, kita SKIP proses convert
-  // ffmpeg.wasm yang berat di akhir, biar lebih cepat & hemat baterai.
   const candidates = [
     "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
     "video/mp4",
@@ -136,7 +174,9 @@ function startRecording() {
   recordedChunks = [];
   chosenMimeType = pickMimeType();
 
-  const videoStream = recordCanvas.captureStream(30);
+  // 24fps cukup buat hasil yang halus tapi lebih ringan buat di-encode
+  // ulang oleh ffmpeg.wasm dibanding 30fps, terutama di HP lemah.
+  const videoStream = recordCanvas.captureStream(24);
   const combinedStream = new MediaStream();
 
   videoStream.getVideoTracks().forEach((t) => combinedStream.addTrack(t));
@@ -168,10 +208,7 @@ function stopRecording() {
 
 
 // ===================
-// CONVERT KE MP4 (ffmpeg.wasm) — dimuat LAZY (cuma di-download pas
-// dibutuhkan, gak dibebanin ke semua orang), supaya browser yang udah
-// bisa rekam mp4 native (Safari) gak perlu download wasm ~25-30MB ini
-// sama sekali.
+// CONVERT KE MP4 (ffmpeg.wasm) — lazy load, dengan timeout & fallback
 // ===================
 
 let ffmpegInstance = null;
@@ -194,6 +231,13 @@ async function getFFmpeg() {
     const instance = new FFmpeg();
     const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
 
+    instance.on("progress", ({ progress }) => {
+      if (processingTextEl && progress >= 0 && progress <= 1) {
+        processingTextEl.textContent =
+          `Mengonversi video... ${Math.round(progress * 100)}%`;
+      }
+    });
+
     await instance.load({
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
@@ -205,6 +249,17 @@ async function getFFmpeg() {
   })();
 
   return ffmpegLoadingPromise;
+
+}
+
+function withTimeout(promise, ms) {
+
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Proses convert kelamaan (timeout)")), ms)
+    )
+  ]);
 
 }
 
@@ -220,15 +275,11 @@ async function convertToMp4(blob) {
 
   await inst.writeFile(inputName, await fetchFile(blob));
 
-  // preset ultrafast: ffmpeg.wasm jalan single-thread di browser,
-  // ultrafast dipilih biar proses convert gak lama-lama amat di HP.
-  // yuv420p wajib biar mp4-nya playable di semua device (termasuk
-  // QuickTime/iOS yang rewel soal pixel format).
   await inst.exec([
     "-i", inputName,
     "-c:v", "libx264",
     "-preset", "ultrafast",
-    "-crf", "23",
+    "-crf", "24",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac",
     "-movflags", "+faststart",
@@ -244,32 +295,42 @@ async function convertToMp4(blob) {
 
 }
 
+// HP dengan RAM kecil (<=2GB, terdeteksi di sebagian browser Android)
+// rawan ngehang/crash kalau dipaksa transcode ffmpeg.wasm. Kalau
+// terdeteksi, langsung kasih file webm tanpa convert, daripada user
+// stuck nungguin proses yang gak bakal pernah selesai.
+function isLikelyLowEndDevice() {
+  return !!(navigator.deviceMemory && navigator.deviceMemory <= 2);
+}
+
 async function handleRecordingStop() {
 
   const rawBlob = new Blob(recordedChunks, {
     type: chosenMimeType.split(";")[0]
   });
 
-  // udah mp4 dari sononya (Safari) -> langsung pakai, gak perlu convert
   if (chosenMimeType.startsWith("video/mp4")) {
-    finalizeDownload(rawBlob, "mp4");
+    finalizeDownload(rawBlob, "mp4", "MP4 (langsung dari kamera, tanpa convert)");
+    return;
+  }
+
+  if (isLikelyLowEndDevice()) {
+    finalizeDownload(rawBlob, "webm", "WEBM (device terdeteksi RAM kecil, convert MP4 di-skip biar gak crash)");
     return;
   }
 
   processingEl.style.display = "flex";
+  processingTextEl.textContent = "Menyiapkan alat convert...";
 
   try {
 
-    const mp4Blob = await convertToMp4(rawBlob);
-    finalizeDownload(mp4Blob, "mp4");
+    const mp4Blob = await withTimeout(convertToMp4(rawBlob), 90000);
+    finalizeDownload(mp4Blob, "mp4", "MP4");
 
   } catch (err) {
 
     console.error("Gagal convert ke mp4:", err);
-    // fallback: tetap kasih file aslinya (webm) biar user tetap dapet
-    // hasil rekamannya walau gagal convert (mis. koneksi internet putus
-    // pas download ffmpeg core)
-    finalizeDownload(rawBlob, "webm");
+    finalizeDownload(rawBlob, "webm", "WEBM (convert MP4 gagal/timeout, video tetap disimpan)");
 
   } finally {
 
@@ -279,12 +340,16 @@ async function handleRecordingStop() {
 
 }
 
-function finalizeDownload(blob, ext) {
+function finalizeDownload(blob, ext, noteText) {
 
   const url = URL.createObjectURL(blob);
 
   downloadLink.href = url;
   downloadLink.download = `daffapriyantana-${Date.now()}.${ext}`;
+
+  if (resultNote) {
+    resultNote.textContent = `Format: ${noteText}`;
+  }
 
   resultBox.style.display = "flex";
 
@@ -313,7 +378,7 @@ function runCountdown(onDone) {
     } else {
       clearInterval(interval);
       countdownEl.style.display = "none";
-      beep(1320, 0.18, 0.3); // nada lebih tinggi pas mulai rekam
+      beep(1320, 0.18, 0.3);
       onDone();
     }
 
@@ -389,9 +454,6 @@ async function initHandLandmarker() {
 
   console.log("Memulai inisialisasi HandLandmarker...");
 
-  // SEMENTARA dipaksa CPU dulu buat debugging Safari — GPU mungkin yang
-  // nyangkut diam-diam (gak nge-throw error) di iOS, jadi fallback
-  // try/catch kita gak pernah ke-trigger walau sebenarnya bermasalah
   handLandmarker = await HandLandmarker.createFromOptions(vision, {
     baseOptions: {
       modelAssetPath:
@@ -410,12 +472,15 @@ async function initHandLandmarker() {
 // ===================
 // CAMERA
 // ===================
+// resolusi ideal dinaikkan ke HD (1280x720) buat hasil yang lebih bagus
+// di live preview. Resolusi hasil REKAMAN tetap dibatasi terpisah lewat
+// MAX_RECORD_SIDE supaya proses convert tetap aman di HP.
 
 navigator.mediaDevices
   .getUserMedia({
     video: {
-      width: { ideal: 480 },
-      height: { ideal: 360 },
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
       facingMode: "user"
     }
   })
@@ -462,6 +527,30 @@ function detect(lm) {
 
 }
 
+// stabilisasi gesture (debounce): di HP, deteksi tangan lebih "noisy"
+// (gampang flicker antar gesture dalam hitungan frame) dibanding laptop.
+// Tanpa ini, audio hidup_jokowi jadi keputus-putus tiap kali deteksi
+// sempat salah baca sesaat. Gesture baru dianggap VALID & dipakai cuma
+// kalau kedeteksi sama 2x berturut-turut.
+let pendingGesture = "NORMAL";
+let pendingCount = 0;
+const REQUIRED_STABLE_DETECTIONS = 2;
+
+function updateStableGesture(rawGesture) {
+
+  if (rawGesture === pendingGesture) {
+    pendingCount++;
+  } else {
+    pendingGesture = rawGesture;
+    pendingCount = 1;
+  }
+
+  if (pendingCount >= REQUIRED_STABLE_DETECTIONS) {
+    gesture = pendingGesture;
+  }
+
+}
+
 
 // ===================
 // WATERMARK (kiri bawah, gaya transparan ala TikTok)
@@ -476,8 +565,6 @@ function drawWatermark(targetCtx, w, h) {
   targetCtx.textAlign = "left";
   targetCtx.textBaseline = "bottom";
 
-  // shadow tipis biar tetap kebaca di background apapun, tapi badan
-  // teksnya sendiri tetap setengah transparan (efek ala watermark TikTok)
   targetCtx.shadowColor = "rgba(0,0,0,0.45)";
   targetCtx.shadowBlur = 6;
   targetCtx.fillStyle = "rgba(255,255,255,0.55)";
@@ -504,22 +591,21 @@ function renderLoop() {
     return;
   }
 
-  // hanya resize canvas kalau ukurannya BENERAN berubah — nge-set
-  // canvas.width/height tiap frame walau nilainya sama tetap memicu
-  // realloc buffer penuh di Safari, ini penyumbang lag yang besar
   if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     textCanvas.width = video.videoWidth;
     textCanvas.height = video.videoHeight;
-    recordCanvas.width = video.videoWidth;
-    recordCanvas.height = video.videoHeight;
+
+    const { rw, rh } = computeRecordSize(video.videoWidth, video.videoHeight);
+    recordCanvas.width = rw;
+    recordCanvas.height = rh;
+
   }
 
   frameCount++;
 
-  // deteksi tangan tiap 3 frame aja (bukan tiap frame) biar gak berat
-  // di Safari/HP yang CPU-nya lebih lemah — video tetap smooth tiap frame
   if (frameCount % 3 === 0 && video.currentTime !== lastVideoTime) {
 
     lastVideoTime = video.currentTime;
@@ -532,11 +618,11 @@ function renderLoop() {
       console.warn("detectForVideo LAMA:", Math.round(t1 - t0), "ms");
     }
 
-    if (result.landmarks && result.landmarks.length > 0) {
-      gesture = detect(result.landmarks[0]);
-    } else {
-      gesture = "NORMAL";
-    }
+    const rawGesture = (result.landmarks && result.landmarks.length > 0)
+      ? detect(result.landmarks[0])
+      : "NORMAL";
+
+    updateStableGesture(rawGesture);
 
   }
 
@@ -544,28 +630,17 @@ function renderLoop() {
   textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
   recordCtx.clearRect(0, 0, recordCanvas.width, recordCanvas.height);
 
-  // ukuran font dihitung dari sisi TERKECIL canvas, biar tetap proporsional
-  // baik di layar landscape (laptop) maupun portrait (HP)
   let fontSize = Math.round(Math.min(canvas.width, canvas.height) * 0.08);
-
-  // posisi teks selalu di tengah vertikal — titik ini PASTI selalu
-  // kelihatan walau canvas di-crop object-fit:cover di rasio layar manapun
   let textY = canvas.height / 2;
 
 
   // ===================
-  // EFEK SESUAI GESTURE (TAMPILAN / PREVIEW)
+  // GAMBAR FRAME (PREVIEW) — blur manual, BUKAN CSS filter lagi
   // ===================
-  // CATATAN: blur pakai CSS filter di elemen <canvas>, BUKAN ctx.filter.
-  // ctx.filter="blur()" tidak reliable di Safari/WebKit (sering gak
-  // ke-apply walau teksnya tetap muncul). CSS filter jauh lebih konsisten
-  // didukung lintas browser, termasuk Safari & in-app browser di iPhone.
 
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  drawFrame(ctx, canvas.width, canvas.height, gesture === "V");
 
   if (gesture === "V") {
-
-    canvas.style.filter = "blur(18px)";
 
     textCtx.font = `bold ${fontSize}px Arial`;
     textCtx.fillStyle = "white";
@@ -575,10 +650,6 @@ function renderLoop() {
     textCtx.shadowBlur = 8;
     textCtx.fillText("FOTO KITA BLUR", canvas.width / 2, textY);
     textCtx.shadowBlur = 0;
-
-  } else {
-
-    canvas.style.filter = "none";
 
   }
 
@@ -619,18 +690,12 @@ function renderLoop() {
 
 
   // ===================
-  // GAMBAR ULANG KE recordCanvas (buat hasil rekaman)
+  // GAMBAR ULANG KE recordCanvas (buat hasil rekaman) — pakai teknik
+  // blur manual yang SAMA biar konsisten sama preview.
   // ===================
-  // Urutan: video (+blur manual kalau gesture V) -> overlay teks/efek
-  // gesture (disalin dari textCanvas) -> watermark paling atas, supaya
-  // watermark selalu kebaca dan gak ketutup efek apapun.
 
-  recordCtx.filter = (gesture === "V") ? "blur(18px)" : "none";
-  recordCtx.drawImage(video, 0, 0, recordCanvas.width, recordCanvas.height);
-  recordCtx.filter = "none";
-
+  drawFrame(recordCtx, recordCanvas.width, recordCanvas.height, gesture === "V");
   recordCtx.drawImage(textCanvas, 0, 0, recordCanvas.width, recordCanvas.height);
-
   drawWatermark(recordCtx, recordCanvas.width, recordCanvas.height);
 
   requestAnimationFrame(renderLoop);

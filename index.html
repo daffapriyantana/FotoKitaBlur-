@@ -14,13 +14,14 @@
 <video id="video" autoplay playsinline muted></video>
 
 <div id="countdown"></div>
-<div id="processing">Memproses video...</div>
+<div id="processing"><span id="processingText">Memproses video...</span></div>
 
 <button id="start">START</button>
 <button id="stop">STOP</button>
 
 <div id="resultBox">
-  <a id="downloadLink" download>⬇ Download Video</a>
+  <a id="downloadLink" download target="_blank" rel="noopener">⬇ Download Video</a>
+  <div id="resultNote"></div>
   <button id="retry">🔄 Rekam Ulang</button>
 </div>
 
