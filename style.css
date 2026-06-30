@@ -214,6 +214,9 @@ canvas{
   font-size: clamp(11px, 1.6vw, 13px);
   color: rgba(255,255,255,0.6);
   text-align:center;
+  white-space: pre-line;
+  max-width: 80vw;
+  word-break: break-word;
 }
 
 #retry{

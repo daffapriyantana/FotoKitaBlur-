@@ -447,10 +447,14 @@ async function handleRecordingStop() {
     } catch (err2) {
 
       console.error("Convert mode darurat juga gagal:", err2);
+
+      const errMsg1 = (err1 && err1.message) ? err1.message : String(err1);
+      const errMsg2 = (err2 && err2.message) ? err2.message : String(err2);
+
       finalizeDownload(
         rawBlob,
         inputExt,
-        `${inputExt.toUpperCase()} (convert MP4 gagal 2x, video disimpan apa adanya — kemungkinan TIDAK kompatibel untuk diedit di TikTok)`
+        `${inputExt.toUpperCase()} (convert MP4 gagal 2x, video disimpan apa adanya — kemungkinan TIDAK kompatibel untuk diedit di TikTok)\n\n[Debug] Percobaan 1: ${errMsg1}\n[Debug] Percobaan 2: ${errMsg2}`
       );
 
     }
