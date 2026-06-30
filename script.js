@@ -281,7 +281,10 @@ async function convertToMp4(blob) {
     "-preset", "ultrafast",
     "-crf", "24",
     "-pix_fmt", "yuv420p",
+    "-r", "24",
+    "-vsync", "cfr",
     "-c:a", "aac",
+    "-ar", "44100",
     "-movflags", "+faststart",
     outputName
   ]);
