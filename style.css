@@ -118,6 +118,49 @@ canvas{
 
 
 /* ===================
+   PROSES CONVERT KE MP4
+   =================== */
+#processing{
+  display:none;
+  position:absolute;
+  z-index:7;
+  top:0;
+  left:0;
+  width:100vw;
+  height:100vh;
+
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  gap:18px;
+
+  background: rgba(0,0,0,0.65);
+
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: clamp(14px, 2.4vw, 18px);
+  font-weight:600;
+  letter-spacing: 1px;
+  color: rgba(255,255,255,0.95);
+  text-align:center;
+  padding: 0 24px;
+}
+
+#processing::before{
+  content:"";
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid rgba(255,255,255,0.25);
+  border-top-color: rgba(255,255,255,0.9);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin{
+  to{ transform: rotate(360deg); }
+}
+
+
+/* ===================
    HASIL REKAMAN
    =================== */
 #resultBox{

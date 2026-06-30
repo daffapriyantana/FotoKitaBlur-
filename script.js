@@ -13,6 +13,7 @@ const textCtx = textCanvas.getContext("2d");
 const start = document.getElementById("start");
 const stopBtn = document.getElementById("stop");
 const countdownEl = document.getElementById("countdown");
+const processingEl = document.getElementById("processing");
 const resultBox = document.getElementById("resultBox");
 const downloadLink = document.getElementById("downloadLink");
 const retryBtn = document.getElementById("retry");
@@ -70,6 +71,36 @@ function setupAudioGraph() {
 
 
 // ===================
+// BEEP COUNTDOWN (ala TikTok) — disintesis pakai oscillator, BUKAN file
+// audio. Sengaja cuma disambung ke audioCtx.destination (speaker), TIDAK
+// disambung ke destNode, supaya bunyi "tik" countdown ini gak ikut
+// kerekam di video (logis, soalnya recording baru mulai SETELAH
+// countdown selesai).
+// ===================
+
+function beep(freq = 880, duration = 0.12, volume = 0.25) {
+
+  if (!audioCtx) return;
+
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.type = "sine";
+  osc.frequency.value = freq;
+
+  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+
+}
+
+
+// ===================
 // MEDIARECORDER
 // ===================
 
@@ -79,11 +110,15 @@ let chosenMimeType = "video/webm";
 
 function pickMimeType() {
 
+  // diutamakan video/mp4 dulu (cuma kebaca true di Safari versi baru) —
+  // kalau browser bisa langsung rekam ke mp4, kita SKIP proses convert
+  // ffmpeg.wasm yang berat di akhir, biar lebih cepat & hemat baterai.
   const candidates = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4",
     "video/webm;codecs=vp9,opus",
     "video/webm;codecs=vp8,opus",
-    "video/webm",
-    "video/mp4" // fallback buat Safari versi yang dukung recording ke mp4
+    "video/webm"
   ];
 
   for (const type of candidates) {
@@ -117,20 +152,7 @@ function startRecording() {
     }
   };
 
-  mediaRecorder.onstop = () => {
-
-    const blob = new Blob(recordedChunks, {
-      type: chosenMimeType.split(";")[0]
-    });
-    const url = URL.createObjectURL(blob);
-    const ext = chosenMimeType.includes("mp4") ? "mp4" : "webm";
-
-    downloadLink.href = url;
-    downloadLink.download = `daffapriyantana-${Date.now()}.${ext}`;
-
-    resultBox.style.display = "flex";
-
-  };
+  mediaRecorder.onstop = handleRecordingStop;
 
   mediaRecorder.start();
 
@@ -146,7 +168,131 @@ function stopRecording() {
 
 
 // ===================
-// COUNTDOWN 3..2..1
+// CONVERT KE MP4 (ffmpeg.wasm) — dimuat LAZY (cuma di-download pas
+// dibutuhkan, gak dibebanin ke semua orang), supaya browser yang udah
+// bisa rekam mp4 native (Safari) gak perlu download wasm ~25-30MB ini
+// sama sekali.
+// ===================
+
+let ffmpegInstance = null;
+let ffmpegLoadingPromise = null;
+
+async function getFFmpeg() {
+
+  if (ffmpegInstance) return ffmpegInstance;
+  if (ffmpegLoadingPromise) return ffmpegLoadingPromise;
+
+  ffmpegLoadingPromise = (async () => {
+
+    const { FFmpeg } = await import(
+      "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js"
+    );
+    const { toBlobURL } = await import(
+      "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js"
+    );
+
+    const instance = new FFmpeg();
+    const baseURL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+
+    await instance.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
+    });
+
+    ffmpegInstance = instance;
+    return instance;
+
+  })();
+
+  return ffmpegLoadingPromise;
+
+}
+
+async function convertToMp4(blob) {
+
+  const inst = await getFFmpeg();
+  const { fetchFile } = await import(
+    "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js"
+  );
+
+  const inputName = "input.webm";
+  const outputName = "output.mp4";
+
+  await inst.writeFile(inputName, await fetchFile(blob));
+
+  // preset ultrafast: ffmpeg.wasm jalan single-thread di browser,
+  // ultrafast dipilih biar proses convert gak lama-lama amat di HP.
+  // yuv420p wajib biar mp4-nya playable di semua device (termasuk
+  // QuickTime/iOS yang rewel soal pixel format).
+  await inst.exec([
+    "-i", inputName,
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "23",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-movflags", "+faststart",
+    outputName
+  ]);
+
+  const data = await inst.readFile(outputName);
+
+  await inst.deleteFile(inputName);
+  await inst.deleteFile(outputName);
+
+  return new Blob([data.buffer], { type: "video/mp4" });
+
+}
+
+async function handleRecordingStop() {
+
+  const rawBlob = new Blob(recordedChunks, {
+    type: chosenMimeType.split(";")[0]
+  });
+
+  // udah mp4 dari sononya (Safari) -> langsung pakai, gak perlu convert
+  if (chosenMimeType.startsWith("video/mp4")) {
+    finalizeDownload(rawBlob, "mp4");
+    return;
+  }
+
+  processingEl.style.display = "flex";
+
+  try {
+
+    const mp4Blob = await convertToMp4(rawBlob);
+    finalizeDownload(mp4Blob, "mp4");
+
+  } catch (err) {
+
+    console.error("Gagal convert ke mp4:", err);
+    // fallback: tetap kasih file aslinya (webm) biar user tetap dapet
+    // hasil rekamannya walau gagal convert (mis. koneksi internet putus
+    // pas download ffmpeg core)
+    finalizeDownload(rawBlob, "webm");
+
+  } finally {
+
+    processingEl.style.display = "none";
+
+  }
+
+}
+
+function finalizeDownload(blob, ext) {
+
+  const url = URL.createObjectURL(blob);
+
+  downloadLink.href = url;
+  downloadLink.download = `daffapriyantana-${Date.now()}.${ext}`;
+
+  resultBox.style.display = "flex";
+
+}
+
+
+// ===================
+// COUNTDOWN 3..2..1 (visual + beep)
 // ===================
 
 function runCountdown(onDone) {
@@ -155,6 +301,7 @@ function runCountdown(onDone) {
 
   countdownEl.style.display = "flex";
   countdownEl.textContent = count;
+  beep(880, 0.12);
 
   const interval = setInterval(() => {
 
@@ -162,9 +309,11 @@ function runCountdown(onDone) {
 
     if (count > 0) {
       countdownEl.textContent = count;
+      beep(880, 0.12);
     } else {
       clearInterval(interval);
       countdownEl.style.display = "none";
+      beep(1320, 0.18, 0.3); // nada lebih tinggi pas mulai rekam
       onDone();
     }
 
@@ -177,13 +326,13 @@ function runCountdown(onDone) {
 // START
 // ===================
 
-start.onclick = () => {
+start.onclick = async () => {
 
   start.style.display = "none";
 
   setupAudioGraph();
   if (audioCtx.state === "suspended") {
-    audioCtx.resume();
+    await audioCtx.resume();
   }
 
   runCountdown(() => {
