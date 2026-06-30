@@ -45,14 +45,15 @@ let MAX_RECORD_SIDE = 1280;
 // ===================
 
 const QUALITY_TIERS = {
-  high: { maxSide: 1920, crf: "17", preset: "fast", timeoutMs: 180000, label: "Tinggi (1080p)" },
-  mid: { maxSide: 1280, crf: "19", preset: "veryfast", timeoutMs: 150000, label: "Bagus (720p)" },
-  // Khusus iOS Safari: ffmpeg.wasm gampang timeout/gagal diam-diam di iPhone
-  // (memori WASM dibatasi ketat sama Safari, dan GitHub Pages gak ngirim
-  // header COOP/COEP buat threading optimal). hardwareConcurrency di iOS
-  // juga sering kebaca tinggi padahal device-nya gak sanggup transcode berat,
-  // jadi JANGAN dipakai buat nentuin tier di iOS — langsung paksa ringan.
-  ios_safe: { maxSide: 960, crf: "23", preset: "ultrafast", timeoutMs: 90000, label: "Hemat (iPhone)" }
+  high: { maxSide: 1920, crf: "17", preset: "fast", timeoutMs: 180000, bitrate: 8000000, label: "Tinggi (1080p)" },
+  mid: { maxSide: 1280, crf: "19", preset: "veryfast", timeoutMs: 150000, bitrate: 5000000, label: "Bagus (720p)" },
+  // iOS sekarang SKIP ffmpeg sepenuhnya (lihat handleRecordingStop), jadi
+  // crf/preset/timeoutMs di sini cuma jaga-jaga buat kasus langka: iOS lama
+  // yang MediaRecorder-nya gak dukung output MP4 native (fallback ke webm,
+  // baru lewat ffmpeg). Karena jalur utamanya gak lewat ffmpeg, resolusi
+  // & bitrate BISA dipasang tinggi — toh yang kerja keras encode-nya
+  // hardware H.264 encoder iPhone, bukan ffmpeg.wasm di CPU/WASM.
+  ios_safe: { maxSide: 1920, crf: "19", preset: "veryfast", timeoutMs: 90000, bitrate: 8000000, label: "Tinggi (iPhone Native)" }
 };
 
 // Tier darurat: dipakai cuma kalau percobaan convert PERTAMA gagal/timeout.
@@ -240,7 +241,8 @@ function startRecording() {
   destNode.stream.getAudioTracks().forEach((t) => combinedStream.addTrack(t));
 
   mediaRecorder = new MediaRecorder(combinedStream, {
-    mimeType: chosenMimeType
+    mimeType: chosenMimeType,
+    videoBitsPerSecond: activeTier.bitrate
   });
 
   mediaRecorder.ondataavailable = (e) => {
@@ -251,7 +253,13 @@ function startRecording() {
 
   mediaRecorder.onstop = handleRecordingStop;
 
-  mediaRecorder.start();
+  // timeslice 1000ms: maksa MediaRecorder flush data tiap 1 detik.
+  // Efek sampingnya (gak dijamin di spec, tapi konsisten kejadian di
+  // banyak encoder termasuk hardware H.264 Safari/iOS): tiap potongan
+  // baru cenderung dimulai dari keyframe baru. Ini trik NATIVE, gratis,
+  // gak butuh ffmpeg sama sekali — cocok buat iOS yang ffmpeg.wasm-nya
+  // gampang crash.
+  mediaRecorder.start(1000);
 
 }
 
@@ -417,6 +425,16 @@ async function handleRecordingStop() {
 
   if (isLikelyLowEndDevice()) {
     finalizeDownload(rawBlob, inputExt, `${inputExt.toUpperCase()} (device RAM kecil, convert di-skip biar gak crash)`);
+    return;
+  }
+
+  // Khusus iOS: ffmpeg.wasm terbukti gagal/crash di banyak iPhone (memori
+  // WASM dibatasi ketat sama Safari). Daripada paksa convert yang ujungnya
+  // gagal terus dan cuma buang waktu user nunggu, langsung pakai hasil
+  // rekam native MP4 dari Safari (sudah dibantu trik timeslice 1 detik
+  // di startRecording supaya keyframe lebih sering tanpa perlu ffmpeg).
+  if (isIOS() && inputExt === "mp4") {
+    finalizeDownload(rawBlob, inputExt, `MP4 Native iPhone — ${activeTier.label} (tanpa convert, langsung dari kamera)`);
     return;
   }
 
