@@ -208,6 +208,9 @@ let recordedChunks = [];
 let chosenMimeType = "video/webm";
 let isRecording = false;
 
+// Timer buat manual frame-pacing (lihat penjelasan di startRecording).
+let manualFrameTimer = null;
+
 function pickMimeType() {
 
   const candidates = [
@@ -234,9 +237,35 @@ function startRecording() {
   chosenMimeType = pickMimeType();
   isRecording = true;
 
-  // 30fps buat hasil gerakan yang lebih halus (sebelumnya 24fps demi
-  // ringan, tapi sekarang kualitas diprioritaskan)
-  const videoStream = recordCanvas.captureStream(30);
+  // PENTING — kenapa captureStream(0) + requestFrame(), BUKAN captureStream(30):
+  // captureStream(30) itu "auto mode": browser nangkep frame setiap kali
+  // canvas-nya digambar ulang di renderLoop(). Masalahnya renderLoop()
+  // jalan bareng proses berat (handLandmarker.detectForVideo), jadi pas
+  // main thread sempat ke-block sesaat, gambar canvas ikut telat -> jarak
+  // antar-frame yang ke-capture jadi GAK RATA (variable frame rate),
+  // walau labelnya tetep "30fps" di video. Di device non-iOS efek ini
+  // ke-tutup karena hasil rekamannya lewat ffmpeg (-vsync cfr) yang
+  // me-resample ulang jadi rata. Tapi di iOS, ffmpeg di-skip (lihat
+  // handleRecordingStop), jadi VFR ini lolos mentah ke file final ->
+  // hasilnya patah-patah pas diputer di TikTok (TikTok lebih strict soal
+  // timing dibanding IG/WA yang lebih toleran).
+  //
+  // Fix: captureStream(0) = "manual mode", track CUMA nangkep frame pas
+  // kita panggil requestFrame() sendiri. Kita panggil itu dari timer
+  // terpisah (setInterval) yang jalan di clock asli, lepas dari beban
+  // render loop / ML — jadi cadence capture-nya tetep konstan 30fps
+  // walau renderLoop sempat nge-lag.
+  const videoStream = recordCanvas.captureStream(0);
+  const videoTrack = videoStream.getVideoTracks()[0];
+
+  const TARGET_RECORD_FPS = 30;
+  if (manualFrameTimer) clearInterval(manualFrameTimer);
+  manualFrameTimer = setInterval(() => {
+    if (videoTrack && typeof videoTrack.requestFrame === "function") {
+      videoTrack.requestFrame();
+    }
+  }, 1000 / TARGET_RECORD_FPS);
+
   const combinedStream = new MediaStream();
 
   videoStream.getVideoTracks().forEach((t) => combinedStream.addTrack(t));
@@ -268,6 +297,11 @@ function startRecording() {
 function stopRecording() {
 
   isRecording = false;
+
+  if (manualFrameTimer) {
+    clearInterval(manualFrameTimer);
+    manualFrameTimer = null;
+  }
 
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
