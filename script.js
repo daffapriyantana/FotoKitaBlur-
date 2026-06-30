@@ -206,6 +206,7 @@ function beep(freq = 880, duration = 0.12, volume = 0.25) {
 let mediaRecorder = null;
 let recordedChunks = [];
 let chosenMimeType = "video/webm";
+let isRecording = false;
 
 function pickMimeType() {
 
@@ -231,6 +232,7 @@ function startRecording() {
 
   recordedChunks = [];
   chosenMimeType = pickMimeType();
+  isRecording = true;
 
   // 30fps buat hasil gerakan yang lebih halus (sebelumnya 24fps demi
   // ringan, tapi sekarang kualitas diprioritaskan)
@@ -264,6 +266,8 @@ function startRecording() {
 }
 
 function stopRecording() {
+
+  isRecording = false;
 
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
@@ -603,7 +607,7 @@ async function initHandLandmarker() {
     baseOptions: {
       modelAssetPath:
         "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-      delegate: "CPU"
+      delegate: "GPU"
     },
     runningMode: "VIDEO",
     numHands: 1
@@ -751,7 +755,14 @@ function renderLoop() {
 
   frameCount++;
 
-  if (frameCount % 3 === 0 && video.currentTime !== lastVideoTime) {
+  // Pas LAGI MEREKAM, kurangi frekuensi deteksi (tiap 6 frame, bukan 3),
+  // biar main thread lebih jarang ke-block sama proses ML -> timing antar
+  // frame video lebih rata -> gak patah-patah/skip pas diputar di TikTok.
+  // Pas gak lagi merekam (preview doang), tetep pakai frekuensi normal
+  // biar responsif.
+  const detectInterval = isRecording ? 6 : 3;
+
+  if (frameCount % detectInterval === 0 && video.currentTime !== lastVideoTime) {
 
     lastVideoTime = video.currentTime;
 
