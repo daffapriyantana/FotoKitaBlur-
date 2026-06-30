@@ -20,8 +20,14 @@ video,canvas{
   object-fit:cover;
 }
 
+/* FIX SAFARI: jangan pakai display:none di <video>.
+   Safari/WebKit menghentikan decoding frame kalau video display:none,
+   akibatnya videoWidth/videoHeight & currentTime gak update -> kamera
+   kelihatan lag/stuck. Pakai opacity:0 supaya tetap di-decode normal,
+   sementara secara visual tetap ketutup sama canvas (z-index:2). */
 video{
-  display:none;
+  opacity:0;
+  pointer-events:none;
 }
 
 canvas{
