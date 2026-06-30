@@ -7,6 +7,9 @@ const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+const textCanvas = document.getElementById("textCanvas");
+const textCtx = textCanvas.getContext("2d");
+
 const start = document.getElementById("start");
 
 const foto = document.getElementById("foto");
@@ -15,6 +18,7 @@ const jokowi = document.getElementById("jokowi");
 let gesture = "NORMAL";
 let handLandmarker = null;
 let lastVideoTime = -1;
+let frameCount = 0;
 
 
 // ===================
@@ -64,7 +68,11 @@ async function initHandLandmarker() {
 
 navigator.mediaDevices
   .getUserMedia({
-    video: true
+    video: {
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      facingMode: "user"
+    }
   })
   .then((stream) => {
     video.srcObject = stream;
@@ -123,9 +131,14 @@ function renderLoop() {
 
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
+  textCanvas.width = video.videoWidth;
+  textCanvas.height = video.videoHeight;
 
-  // hanya deteksi kalau frame video berganti (hindari proses dobel)
-  if (video.currentTime !== lastVideoTime) {
+  frameCount++;
+
+  // deteksi tangan tiap 2 frame aja (bukan tiap frame) biar gak berat
+  // di Safari/HP yang CPU-nya lebih lemah — video tetap smooth tiap frame
+  if (frameCount % 2 === 0 && video.currentTime !== lastVideoTime) {
 
     lastVideoTime = video.currentTime;
 
@@ -140,6 +153,7 @@ function renderLoop() {
   }
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
 
   // ukuran font dihitung dari sisi TERKECIL canvas, biar tetap proporsional
   // baik di layar landscape (laptop) maupun portrait (HP)
@@ -153,25 +167,29 @@ function renderLoop() {
   // ===================
   // EFEK SESUAI GESTURE
   // ===================
+  // CATATAN: blur pakai CSS filter di elemen <canvas>, BUKAN ctx.filter.
+  // ctx.filter="blur()" tidak reliable di Safari/WebKit (sering gak
+  // ke-apply walau teksnya tetap muncul). CSS filter jauh lebih konsisten
+  // didukung lintas browser, termasuk Safari & in-app browser di iPhone.
+
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   if (gesture === "V") {
 
-    ctx.filter = "blur(25px)";
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    ctx.filter = "none";
+    canvas.style.filter = "blur(18px)";
 
-    ctx.font = `bold ${fontSize}px Arial`;
-    ctx.fillStyle = "white";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.shadowColor = "rgba(0,0,0,0.6)";
-    ctx.shadowBlur = 12;
-    ctx.fillText("FOTO KITA BLUR", canvas.width / 2, textY);
-    ctx.shadowBlur = 0;
+    textCtx.font = `bold ${fontSize}px Arial`;
+    textCtx.fillStyle = "white";
+    textCtx.textAlign = "center";
+    textCtx.textBaseline = "middle";
+    textCtx.shadowColor = "rgba(0,0,0,0.6)";
+    textCtx.shadowBlur = 12;
+    textCtx.fillText("FOTO KITA BLUR", canvas.width / 2, textY);
+    textCtx.shadowBlur = 0;
 
   } else {
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.style.filter = "none";
 
   }
 
@@ -189,17 +207,17 @@ function renderLoop() {
       });
     }
 
-    ctx.fillStyle = "rgba(255,0,0,0.3)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    textCtx.fillStyle = "rgba(255,0,0,0.3)";
+    textCtx.fillRect(0, 0, textCanvas.width, textCanvas.height);
 
-    ctx.font = `bold ${fontSize}px Arial`;
-    ctx.fillStyle = "white";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.shadowColor = "rgba(0,0,0,0.6)";
-    ctx.shadowBlur = 12;
-    ctx.fillText("pria solo itu lagi", canvas.width / 2, textY);
-    ctx.shadowBlur = 0;
+    textCtx.font = `bold ${fontSize}px Arial`;
+    textCtx.fillStyle = "white";
+    textCtx.textAlign = "center";
+    textCtx.textBaseline = "middle";
+    textCtx.shadowColor = "rgba(0,0,0,0.6)";
+    textCtx.shadowBlur = 12;
+    textCtx.fillText("pria solo itu lagi", canvas.width / 2, textY);
+    textCtx.shadowBlur = 0;
 
   } else {
 

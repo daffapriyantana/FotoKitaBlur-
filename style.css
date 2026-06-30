@@ -28,6 +28,11 @@ canvas{
   z-index:2;
 }
 
+#textCanvas{
+  z-index:3;
+  pointer-events:none;
+}
+
 button{
   position:absolute;
   z-index:5;
