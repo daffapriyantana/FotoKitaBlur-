@@ -855,6 +855,43 @@ function getFistOverlayCanvas(w, h) {
 
 
 // ===================
+// CANVAS DOWNSCALE KHUSUS BUAT INPUT DETEKSI TANGAN
+// ===================
+// detectForVideo() dikasih `video` element langsung (resolusi native kamera,
+// bisa sampe 1920x1080) itu MAHAL secara komputasi -> kadang nyentuh
+// >200ms sekali proses (ke-log lewat console.warn di bawah), dan karena JS
+// single-threaded, itu nge-block SEMUA hal lain di main thread termasuk
+// canvas draw & frame capture buat recording -> akar dari video patah-patah.
+// Landmark hasil MediaPipe dinormalisasi 0..1, JADI TIDAK butuh resolusi
+// tinggi buat akurat. Kita downscale dulu ke canvas kecil sebelum dikirim
+// ke detector, biar inference jauh lebih cepat & jarang/gak pernah lagi
+// nge-block lama.
+const detectCanvas = document.createElement("canvas");
+const detectCtx = detectCanvas.getContext("2d", { willReadFrequently: true });
+const DETECT_MAX_SIDE = 256;
+
+function getDetectionFrame() {
+
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const longest = Math.max(vw, vh);
+  const scale = Math.min(1, DETECT_MAX_SIDE / longest);
+
+  const dw = Math.max(1, Math.round(vw * scale));
+  const dh = Math.max(1, Math.round(vh * scale));
+
+  if (detectCanvas.width !== dw || detectCanvas.height !== dh) {
+    detectCanvas.width = dw;
+    detectCanvas.height = dh;
+  }
+
+  detectCtx.drawImage(video, 0, 0, dw, dh);
+  return detectCanvas;
+
+}
+
+
+// ===================
 // LOOP UTAMA
 // ===================
 
@@ -880,19 +917,21 @@ function renderLoop() {
 
   frameCount++;
 
-  // Pas LAGI MEREKAM, kurangi frekuensi deteksi (tiap 6 frame, bukan 3),
+  // Pas LAGI MEREKAM, kurangi frekuensi deteksi (tiap 8 frame, bukan 3),
   // biar main thread lebih jarang ke-block sama proses ML -> timing antar
   // frame video lebih rata -> gak patah-patah/skip pas diputar di TikTok.
   // Pas gak lagi merekam (preview doang), tetep pakai frekuensi normal
-  // biar responsif.
-  const detectInterval = isRecording ? 6 : 3;
+  // biar responsif. (Dinaikkan dari 6 -> 8 sebagai lapis kedua, di atas
+  // fix utama yaitu downscale input deteksi.)
+  const detectInterval = isRecording ? 8 : 3;
 
   if (frameCount % detectInterval === 0 && video.currentTime !== lastVideoTime) {
 
     lastVideoTime = video.currentTime;
 
     const t0 = performance.now();
-    const result = handLandmarker.detectForVideo(video, performance.now());
+    const detectionFrame = getDetectionFrame();
+    const result = handLandmarker.detectForVideo(detectionFrame, performance.now());
     const t1 = performance.now();
 
     if (t1 - t0 > 200) {
