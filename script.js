@@ -293,14 +293,14 @@ function withTimeout(promise, ms) {
 
 }
 
-async function convertToMp4(blob) {
+async function convertToMp4(blob, inputExt) {
 
   const inst = await getFFmpeg();
   const { fetchFile } = await import(
     "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js"
   );
 
-  const inputName = "input.webm";
+  const inputName = `input.${inputExt}`;
   const outputName = "output.mp4";
 
   await inst.writeFile(inputName, await fetchFile(blob));
@@ -354,13 +354,16 @@ async function handleRecordingStop() {
     type: chosenMimeType.split(";")[0]
   });
 
-  if (chosenMimeType.startsWith("video/mp4")) {
-    finalizeDownload(rawBlob, "mp4", "MP4 (langsung dari kamera, tanpa convert)");
-    return;
-  }
+  // PENTING: dulu di sini ada shortcut "kalau browser udah native rekam
+  // ke mp4 (Safari/iPhone), skip ffmpeg" — niatnya biar cepat. Tapi itu
+  // bikin SEMUA fix CFR & keyframe interval gak pernah ke-apply di
+  // iPhone, karena hasil rekaman Safari native langsung dipakai apa
+  // adanya tanpa diproses ulang. Makanya sekarang SEMUA hasil rekaman,
+  // dari device manapun, WAJIB lewat ffmpeg supaya konsisten kompatibel.
+  const inputExt = chosenMimeType.includes("mp4") ? "mp4" : "webm";
 
   if (isLikelyLowEndDevice()) {
-    finalizeDownload(rawBlob, "webm", "WEBM (device terdeteksi RAM kecil, convert MP4 di-skip biar gak crash)");
+    finalizeDownload(rawBlob, inputExt, `${inputExt.toUpperCase()} (device RAM kecil, convert di-skip biar gak crash)`);
     return;
   }
 
@@ -369,13 +372,13 @@ async function handleRecordingStop() {
 
   try {
 
-    const mp4Blob = await withTimeout(convertToMp4(rawBlob), activeTier.timeoutMs);
+    const mp4Blob = await withTimeout(convertToMp4(rawBlob, inputExt), activeTier.timeoutMs);
     finalizeDownload(mp4Blob, "mp4", `MP4 — Kualitas ${activeTier.label}`);
 
   } catch (err) {
 
     console.error("Gagal convert ke mp4:", err);
-    finalizeDownload(rawBlob, "webm", "WEBM (convert MP4 gagal/timeout, video tetap disimpan)");
+    finalizeDownload(rawBlob, inputExt, `${inputExt.toUpperCase()} (convert MP4 gagal/timeout, video tetap disimpan)`);
 
   } finally {
 
