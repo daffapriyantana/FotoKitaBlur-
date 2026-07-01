@@ -917,6 +917,17 @@ function renderLoop() {
 
   frameCount++;
 
+  // ===================
+  // MODE DIAGNOSTIK SEMENTARA — set false lagi kalau udah selesai tes.
+  // Kalau true: deteksi tangan TOTAL dimatikan pas lagi recording (gesture
+  // dibekukan di kondisi terakhir sebelum recording mulai). Ini buat
+  // mastiin apakah ML beneran biang keladi drop fps, atau ada penyebab
+  // lain di pipeline canvas/MediaRecorder.
+  // ===================
+  const DIAGNOSTIC_DISABLE_DETECTION_WHILE_RECORDING = true;
+
+  const skipDetection = isRecording && DIAGNOSTIC_DISABLE_DETECTION_WHILE_RECORDING;
+
   // Pas LAGI MEREKAM, kurangi frekuensi deteksi (tiap 8 frame, bukan 3),
   // biar main thread lebih jarang ke-block sama proses ML -> timing antar
   // frame video lebih rata -> gak patah-patah/skip pas diputar di TikTok.
@@ -925,7 +936,7 @@ function renderLoop() {
   // fix utama yaitu downscale input deteksi.)
   const detectInterval = isRecording ? 8 : 3;
 
-  if (frameCount % detectInterval === 0 && video.currentTime !== lastVideoTime) {
+  if (!skipDetection && frameCount % detectInterval === 0 && video.currentTime !== lastVideoTime) {
 
     lastVideoTime = video.currentTime;
 
