@@ -510,7 +510,8 @@ async function handleRecordingStop() {
       finalizeDownload(
         rawBlob,
         inputExt,
-        `${inputExt.toUpperCase()} (convert MP4 gagal 2x, video disimpan apa adanya — kemungkinan TIDAK kompatibel untuk diedit di TikTok)\n\n[Debug] Percobaan 1: ${errMsg1}\n[Debug] Percobaan 2: ${errMsg2}`
+        `video berhasil disimpan, tetapi videonya belum bisa di upload ke tiktok ya temen" upload ke lainnya bisa kok, Terimakasih`,
+        true
       );
 
     }
@@ -523,7 +524,7 @@ async function handleRecordingStop() {
 
 }
 
-function finalizeDownload(blob, ext, noteText) {
+function finalizeDownload(blob, ext, noteText, rawNote = false) {
 
   const url = URL.createObjectURL(blob);
 
@@ -531,7 +532,7 @@ function finalizeDownload(blob, ext, noteText) {
   downloadLink.download = `daffapriyantana-${Date.now()}.${ext}`;
 
   if (resultNote) {
-    resultNote.textContent = `Format: ${noteText}`;
+    resultNote.textContent = rawNote ? noteText : `Format: ${noteText}`;
   }
 
   resultBox.style.display = "flex";
