@@ -462,7 +462,7 @@ async function handleRecordingStop() {
   const inputExt = chosenMimeType.includes("mp4") ? "mp4" : "webm";
 
   if (isLikelyLowEndDevice()) {
-    finalizeDownload(rawBlob, inputExt, `Video berhasil disimpan. Siap diupload ke TikTok/IG/dll 👍`, true);
+    finalizeDownload(rawBlob, inputExt, `video berhasil disimpan, tetapi videonya belum bisa di upload ke tiktok ya temen" upload ke lainnya bisa kok, Terimakasih`, true);
     return;
   }
 
@@ -472,7 +472,7 @@ async function handleRecordingStop() {
   // rekam native MP4 dari Safari (sudah dibantu trik timeslice 1 detik
   // di startRecording supaya keyframe lebih sering tanpa perlu ffmpeg).
   if (isIOS() && inputExt === "mp4") {
-    finalizeDownload(rawBlob, inputExt, `Video berhasil disimpan dalam format asli iPhone. Siap diupload ke TikTok/IG/dll 👍`, true);
+    finalizeDownload(rawBlob, inputExt, `video berhasil disimpan, tetapi videonya belum bisa di upload ke tiktok ya temen" upload ke lainnya bisa kok, Terimakasih`, true);
     return;
   }
 
@@ -485,7 +485,7 @@ async function handleRecordingStop() {
       convertToMp4(rawBlob, inputExt, activeTier),
       activeTier.timeoutMs
     );
-    finalizeDownload(mp4Blob, "mp4", `Video berhasil disimpan. Siap diupload ke TikTok/IG/dll 👍`, true);
+    finalizeDownload(mp4Blob, "mp4", `video berhasil disimpan, tetapi videonya belum bisa di upload ke tiktok ya temen" upload ke lainnya bisa kok, Terimakasih`, true);
 
   } catch (err1) {
 
@@ -498,7 +498,7 @@ async function handleRecordingStop() {
         convertToMp4(rawBlob, inputExt, RESCUE_TIER),
         RESCUE_TIER.timeoutMs
       );
-      finalizeDownload(mp4BlobRescue, "mp4", `Video berhasil disimpan. Siap diupload ke TikTok/IG/dll 👍`, true);
+      finalizeDownload(mp4BlobRescue, "mp4", `video berhasil disimpan, tetapi videonya belum bisa di upload ke tiktok ya temen" upload ke lainnya bisa kok, Terimakasih`, true);
 
     } catch (err2) {
 
