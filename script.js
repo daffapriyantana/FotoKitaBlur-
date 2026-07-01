@@ -53,7 +53,7 @@ const QUALITY_TIERS = {
   // baru lewat ffmpeg). Karena jalur utamanya gak lewat ffmpeg, resolusi
   // & bitrate BISA dipasang tinggi — toh yang kerja keras encode-nya
   // hardware H.264 encoder iPhone, bukan ffmpeg.wasm di CPU/WASM.
-  ios_safe: { maxSide: 1920, crf: "19", preset: "veryfast", timeoutMs: 90000, bitrate: 8000000, label: "Tinggi (iPhone Native)" }
+  ios_safe: { maxSide: 1280, crf: "19", preset: "veryfast", timeoutMs: 90000, bitrate: 6000000, label: "Bagus (iPhone Native, 720p)" }
 };
 
 // Tier darurat: dipakai cuma kalau percobaan convert PERTAMA gagal/timeout.
@@ -950,12 +950,9 @@ function renderLoop() {
   textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
   recordCtx.clearRect(0, 0, recordCanvas.width, recordCanvas.height);
 
-
   // ===================
-  // GAMBAR FRAME (PREVIEW) — blur manual, BUKAN CSS filter lagi
+  // OVERLAY TEKS GESTURE (buat preview & buat di-drawImage ke recordCanvas)
   // ===================
-
-  drawFrame(ctx, canvas.width, canvas.height, gesture === "V");
 
   if (gesture === "V") {
     textCtx.drawImage(getVTextCanvas(canvas.width, canvas.height), 0, 0);
@@ -988,13 +985,31 @@ function renderLoop() {
 
 
   // ===================
-  // GAMBAR ULANG KE recordCanvas (buat hasil rekaman) — pakai teknik
-  // blur manual yang SAMA biar konsisten sama preview.
+  // GAMBAR FRAME — PENTING: pas LAGI MEREKAM, blur+drawImage(video) yang
+  // MAHAL cuma dihitung SEKALI (ke recordCanvas), lalu preview tinggal
+  // nge-blit hasilnya yang udah jadi (operasi scale biasa, jauh lebih
+  // murah daripada ngulang seluruh pipeline blur dari nol). Ini motong
+  // beban kerja per-frame jadi separuh pas lagi recording -> canvas
+  // digambar lebih stabil -> frame video gak lompat-lompat lagi.
+  // Pas GAK recording (preview doang, belum tentu sama resolusi recordCanvas
+  // & gak ada tekanan waktu buat MediaRecorder), tetep gambar langsung ke
+  // preview biar kualitas preview maksimal & responsif.
   // ===================
 
-  drawFrame(recordCtx, recordCanvas.width, recordCanvas.height, gesture === "V");
-  recordCtx.drawImage(textCanvas, 0, 0, recordCanvas.width, recordCanvas.height);
-  drawWatermark(recordCtx, recordCanvas.width, recordCanvas.height);
+  if (isRecording) {
+
+    drawFrame(recordCtx, recordCanvas.width, recordCanvas.height, gesture === "V");
+    recordCtx.drawImage(textCanvas, 0, 0, recordCanvas.width, recordCanvas.height);
+    drawWatermark(recordCtx, recordCanvas.width, recordCanvas.height);
+
+    // preview tinggal nge-blit hasil recordCanvas yang udah jadi (murah)
+    ctx.drawImage(recordCanvas, 0, 0, canvas.width, canvas.height);
+
+  } else {
+
+    drawFrame(ctx, canvas.width, canvas.height, gesture === "V");
+
+  }
 
   requestAnimationFrame(renderLoop);
 
