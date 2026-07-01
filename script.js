@@ -462,7 +462,7 @@ async function handleRecordingStop() {
   const inputExt = chosenMimeType.includes("mp4") ? "mp4" : "webm";
 
   if (isLikelyLowEndDevice()) {
-    finalizeDownload(rawBlob, inputExt, `${inputExt.toUpperCase()} (device RAM kecil, convert di-skip biar gak crash)`);
+    finalizeDownload(rawBlob, inputExt, `Video berhasil disimpan. Siap diupload ke TikTok/IG/dll 👍`, true);
     return;
   }
 
@@ -485,7 +485,7 @@ async function handleRecordingStop() {
       convertToMp4(rawBlob, inputExt, activeTier),
       activeTier.timeoutMs
     );
-    finalizeDownload(mp4Blob, "mp4", `MP4 — Kualitas ${activeTier.label}`);
+    finalizeDownload(mp4Blob, "mp4", `Video berhasil disimpan. Siap diupload ke TikTok/IG/dll 👍`, true);
 
   } catch (err1) {
 
@@ -498,7 +498,7 @@ async function handleRecordingStop() {
         convertToMp4(rawBlob, inputExt, RESCUE_TIER),
         RESCUE_TIER.timeoutMs
       );
-      finalizeDownload(mp4BlobRescue, "mp4", `MP4 — ${RESCUE_TIER.label}`);
+      finalizeDownload(mp4BlobRescue, "mp4", `Video berhasil disimpan. Siap diupload ke TikTok/IG/dll 👍`, true);
 
     } catch (err2) {
 
