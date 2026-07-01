@@ -472,7 +472,7 @@ async function handleRecordingStop() {
   // rekam native MP4 dari Safari (sudah dibantu trik timeslice 1 detik
   // di startRecording supaya keyframe lebih sering tanpa perlu ffmpeg).
   if (isIOS() && inputExt === "mp4") {
-    finalizeDownload(rawBlob, inputExt, `MP4 Native iPhone — ${activeTier.label} (tanpa convert, langsung dari kamera)`);
+    finalizeDownload(rawBlob, inputExt, `Video berhasil disimpan dalam format asli iPhone. Siap diupload ke TikTok/IG/dll 👍`, true);
     return;
   }
 
